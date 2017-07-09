@@ -8,7 +8,7 @@ from quantopian.pipeline.classifiers.morningstar import Sector
 from quantopian.pipeline.factors import AverageDollarVolume, SimpleMovingAverage
 from quantopian.pipeline.filters.morningstar import IsPrimaryShare
 
-# Create Price to Sales custom factor  
+# Create Price to Sales Custom Factor  
 class Price_to_sales(CustomFactor):  
     # Pre-declare inputs and window_length  
     inputs = [morningstar.valuation_ratios.ps_ratio]  
