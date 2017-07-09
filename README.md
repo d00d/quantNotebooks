@@ -1,2 +1,3 @@
-iPython Notebook Research note collection.
-Various Quantopian factor-based trading alogrithms implemented for zipline in Python.
+iPython Notebooks - testing and research.
+
+Repo holding various Quantopian-based trade system alogrithms (implemented for zipline in Python).
