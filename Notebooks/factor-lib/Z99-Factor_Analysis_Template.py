@@ -1,3 +1,5 @@
+
+# ----- Z99 Factor Analysis Template -------
 from quantopian.research import run_pipeline
 from quantopian.pipeline import Pipeline
 from quantopian.pipeline.factors import Latest
