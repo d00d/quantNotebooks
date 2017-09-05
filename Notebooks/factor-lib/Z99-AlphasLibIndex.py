@@ -1,206 +1,288 @@
-bs = morningstar.balance_sheet
-cfs = morningstar.cash_flow_statement
-is_ = morningstar.income_statement
-or_ = morningstar.operation_ratios
-er = morningstar.earnings_report
-v = morningstar.valuation
-vr = morningstar.valuation_ratios
+"""
+The below is a list of many factors. Taken from several sources,
+these factors have been forecast to generate alpha signals either
+alone or in combination with eachother. These can form the basis
+of factors trading algoithms.
+NB: Morningstar cash_flow_statement, income_statement, earnings_report are quarterly
+NB: Morningstar ratios are avoided, unless they yield ostensibly better data than otherwise
+NB: Multiples of 4 are due to the fact that some metrics are
+released quarterly and some are released annually. This is a good approximation and the least comutationally
+expensive way to calculate these metrics
+"""
 
-def make_factors():
-    """List of many factors for use in cross-sectional factor algorithms"""   
-    
+import numpy as np
+import pandas as pd
+import talib
+from quantopian.algorithm import attach_pipeline, pipeline_output
+from quantopian.pipeline import Pipeline
+from quantopian.pipeline.factors import Latest
+from quantopian.pipeline.data.builtin import USEquityPricing
+from quantopian.pipeline.data import morningstar
+from quantopian.pipeline.factors import CustomFactor, SimpleMovingAverage, AverageDollarVolume
+from quantopian.pipeline.filters.morningstar import IsPrimaryShare
+from quantopian.pipeline.data import morningstar as mstar
+from quantopian.pipeline.classifiers.morningstar import Sector
+from quantopian.pipeline.data.quandl import fred_usdontd156n as libor
+
+
+class Factors:
+    """List of many factors for use in cross-sectional factor algorithms"""
+
     """TRADITIONAL VALUE"""
 
-    def Price_To_Sales():
+    # Price to Sales Ratio (MORNINGSTAR)
+    class Price_To_Sales(CustomFactor):
         """
         Price to Sales Ratio:
         Closing price divided by sales per share.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         Low P/S Ratio suggests that an equity cheap
         Differs substantially between sectors
         """
-        return vr.ps_ratio.latest
+        inputs = [morningstar.valuation_ratios.ps_ratio]
+        window_length = 1
 
-    def Price_To_Earnings():
+        def compute(self, today, assets, out, ps):
+            out[:] = ps[-1]
+
+    # Price to Earnings Ratio (MORNINGSTAR)
+    class Price_To_Earnings(CustomFactor):
         """
         Price to Earnings Ratio:
         Closing price divided by earnings per share.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         Low P/E Ratio suggests that an equity cheap
         Differs substantially between sectors
         """
-        return vr.pe_ratio.latest
+        inputs = [morningstar.valuation_ratios.pe_ratio]
+        window_length = 1
 
-    def Price_To_Diluted_Earnings():
+        def compute(self, today, assets, out, pe):
+            out[:] = pe[-1]
+
+    # Price to Diluted Earnings Ratio (MORNINGSTAR)
+    class Price_To_Diluted_Earnings(CustomFactor):
         """
         Price to Diluted Earnings Ratio:
         Closing price divided by diluted earnings per share.
-        Diluted Earnings include dilutive securities
-        Options, convertible bonds etc.)
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        Diluted Earnings include dilutive securities (Options, convertible bonds etc.) 
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         Low P/Diluted Earnings Ratio suggests that equity is cheap
         Differs substantially between sectors
         """
-        return USEquityPricing.close.latest / \
-            (er.diluted_eps.latest * 4.)
+        inputs = [USEquityPricing.close,
+                  morningstar.earnings_report.diluted_eps]
+        window_length = 1
 
-    def Price_To_Forward_Earnings():
+        def compute(self, today, assets, out, close, deps):
+            out[:] = close[-1] / (deps[-1] * 4)
+
+    # Forward Price to Earnings Ratio (MORNINGSTAR)
+    class Price_To_Forward_Earnings(CustomFactor):
         """
         Price to Forward Earnings Ratio:
-        Closing price divided by projected earnings for
-        next fiscal period.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        Closing price divided by projected earnings for next fiscal period.
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         Low P/FY1 EPS Ratio suggests that equity is cheap
         Differs substantially between sectors
         """
-        return vr.forward_pe_ratio.latest
+        inputs = [morningstar.valuation_ratios.forward_pe_ratio]
+        window_length = 1
 
-    def Dividend_Yield():
+        def compute(self, today, assets, out, fpe):
+            out[:] = fpe[-1]
+
+    # Dividend Yield (MORNINGSTAR)
+    class Dividend_Yield(CustomFactor):
         """
         Dividend Yield:
         Dividends per share divided by closing price.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High Dividend Yield Ratio suggests that an equity
-        is attractive to an investor as the dividends
-        paid out will be a larger proportion of
-        the price they paid for it.
+        High Dividend Yield Ratio suggests that an equity is attractive to an investor
+        as the dividends paid out will be a larger proportion of the price they paid for it.
         """
-        return vr.dividend_yield.latest
+        inputs = [morningstar.valuation_ratios.dividend_yield]
+        window_length = 1
 
-    def Price_To_Free_Cashflows():
+        def compute(self, today, assets, out, dy):
+            out[:] = dy[-1]
+
+    # Price to Free Cash Flow (MORNINGSTAR)
+    class Price_To_Free_Cashflows(CustomFactor):
         """
         Price to Free Cash Flows:
         Closing price divided by free cash flow.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         Low P/ Free Cash Flows suggests that equity is cheap
         Differs substantially between sectors
         """
-        return USEquityPricing.close.latest / \
-            vr.fcf_per_share.latest
+        inputs = [USEquityPricing.close,
+                  morningstar.valuation_ratios.fcf_per_share]
+        window_length = 1
 
-    def Price_To_Operating_Cashflows():
+        def compute(self, today, assets, out, close, fcf):
+            out[:] = close[-1] / fcf[-1]
+
+    # Price to Operating Cash Flow (MORNINGSTAR)
+    class Price_To_Operating_Cashflows(CustomFactor):
         """
         Price to Operating Cash Flows:
         Closing price divided by operating cash flow.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         Low P/ Operating Cash Flows suggests that equity is cheap
         Differs substantially between sectors
         """
-        return USEquityPricing.close.latest / \
-            vr.cfo_per_share.latest
+        inputs = [USEquityPricing.close,
+                  morningstar.valuation_ratios.cfo_per_share]
+        window_length = 1
 
-    def Price_To_Book():
+        def compute(self, today, assets, out, close, cfo):
+            out[:] = close[-1] / cfo[-1]
+
+    # Price to Book Ratio (MORNINGSTAR)
+    class Price_To_Book(CustomFactor):
         """
         Price to Book Value:
         Closing price divided by book value.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         Low P/B Ratio suggests that equity is cheap
         Differs substantially between sectors
         """
-        return USEquityPricing.close.latest / \
-            vr.book_value_per_share.latest
+        inputs = [USEquityPricing.close,
+                  morningstar.valuation_ratios.book_value_per_share]
+        window_length = 1
 
-    def Cashflows_To_Assets():
+        def compute(self, today, assets, out, close, bv):
+            out[:] = close[-1] / bv[-1]
+
+    # Free Cash Flow to Total Assets Ratio (MORNINGSTAR)
+    class Cashflows_To_Assets(CustomFactor):
         """
         Cash flows to Assets:
         Operating Cash Flows divided by total assets.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High Cash Flows to Assets Ratio suggests that the
-        company has cash for future operations
+        High Cash Flows to Assets Ratio suggests that the company has cash for future operations
         """
-        return vr.cfo_per_share.latest / \
-            (bs.total_assets.latest / v.shares_outstanding.latest)
+        inputs = [morningstar.valuation_ratios.cfo_per_share, morningstar.balance_sheet.total_assets,
+                  morningstar.valuation.shares_outstanding]
+        window_length = 1
 
-    def EV_To_Cashflows():
+        def compute(self, today, assets, out, cfo, tot_assets, so):
+            out[:] = cfo[-1] / (tot_assets[-1] / so[-1])
+
+    # Enterprise Value to Free Cash Flow (MORNINGSTAR)
+    class EV_To_Cashflows(CustomFactor):
         """
         Enterprise Value to Cash Flows:
         Enterprise Value divided by Free Cash Flows.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        Low EV/FCF suggests that a company has a good amount of
-        money relative to its size readily available
+        Low EV/FCF suggests that a company has a good amount of money relative to its size readily available
         """
-        return v.enterprise_value.latest / \
-            cfs.free_cash_flow.latest
+        inputs = [morningstar.valuation.enterprise_value,
+                  morningstar.cash_flow_statement.free_cash_flow]
+        window_length = 1
 
-    def EV_To_EBITDA():
+        def compute(self, today, assets, out, ev, fcf):
+            out[:] = ev[-1] / fcf[-1]
+
+    # EV to EBITDA (MORNINGSTAR)
+    class EV_To_EBITDA(CustomFactor):
         """
-        Enterprise Value to Earnings Before Interest, Taxes,
-        Deprecation and Amortization (EBITDA):
+        Enterprise Value to Earnings Before Interest, Taxes, Deprecation and Amortization (EBITDA):
         Enterprise Value divided by EBITDA.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         Low EV/EBITDA suggests that equity is cheap
         Differs substantially between sectors / companies
         """
-        return v.enterprise_value.latest / \
-            (is_.ebitda.latest * 4.)
+        inputs = [morningstar.valuation.enterprise_value,
+                  morningstar.income_statement.ebitda]
+        window_length = 1
 
-    def EBITDA_Yield():
+        def compute(self, today, assets, out, ev, ebitda):
+            out[:] = ev[-1] / (ebitda[-1] * 4)
+
+    # EBITDA Yield (MORNINGSTAR)
+    class EBITDA_Yield(CustomFactor):
         """
         EBITDA Yield:
         EBITDA divided by close price.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High EBITDA Yield suggests that a company is profitable
         """
-        return (is_.ebitda.latest * 4.) / \
-            USEquityPricing.close.latest
-        
-    """SIZE"""
-    def Market_Cap():
-        """
-        Market Capitalization:
-        Market Capitalization of the company issuing the equity.
-        (Close Price * Shares Outstanding)
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
-        Notes:
-        High value for large companies, low value for small companies
-        """
-        return morningstar.valuation.market_cap.latest
+        inputs = [USEquityPricing.close, morningstar.income_statement.ebitda]
+        window_length = 1
 
-    # Log Market Cap
-    def Log_Market_Cap():
-        """
-        Natural Logarithm of Market Capitalization:
-        Log of Market Cap. log(Close Price * Shares Outstanding)
-        https://www.math.nyu.edu/faculty/avellane/Lo13030.pdf
-        Notes:
-        High value for large companies, low value for small companies
-        Limits the outlier effect of very large companies through
-        log transformation
-        """
-        return morningstar.valuation.market_cap.latest.log()
+        def compute(self, today, assets, out, close, ebitda):
+            out[:] = (ebitda[-1] * 4) / close[-1]
 
-    def Log_Market_Cap_Cubed():
-        """
-        Natural Logarithm of Market Capitalization Cubed:
-        Log of Market Cap Cubed.
-        https://www.math.nyu.edu/faculty/avellane/Lo13030.pdf
-        Notes:
-        High value for large companies, low value for small companies
-        Limits the outlier effect of very large companies through
-        log transformation
-        """
-        return morningstar.valuation.market_cap.latest.log() ** 3
-
-    
     """MOMENTUM"""
 
+    # Percent Above 260-day Low
+    class Percent_Above_Low(CustomFactor):
+        """
+        Percent Above 260-Day Low:
+        Percentage increase in close price between today and lowest close price 
+        in 260-day lookback window.
+        https://www.math.nyu.edu/faculty/avellane/Lo13030.pdf
+        Notes:
+        High value suggests momentum
+        """
+        inputs = [USEquityPricing.close]
+        window_length = 260
+
+        def compute(self, today, assets, out, close):
+
+            # array to store values of each security
+            secs = []
+
+            for col in close.T:
+                # metric for each security
+                percent_above = ((col[-1] - min(col)) / min(col)) * 100
+                secs.append(percent_above)
+            out[:] = secs
+
+    # Percent Below 260-day High
+    class Percent_Below_High(CustomFactor):
+        """
+        Percent Below 260-Day High:
+        Percentage decrease in close price between today and highest close price 
+        in 260-day lookback window.
+        https://www.math.nyu.edu/faculty/avellane/Lo13030.pdf
+        DB QCD (unsure if public?)
+        Notes:
+        Low value suggests momentum
+        """
+        inputs = [USEquityPricing.close]
+        window_length = 260
+
+        def compute(self, today, assets, out, close):
+
+            # array to store values of each security
+            secs = []
+
+            for col in close.T:
+                # metric for each security
+                percent_below = ((col[-1] - max(col)) / max(col)) * 100
+                secs.append(percent_below)
+            out[:] = secs
+
+    # 4/52 Price Oscillator
     class Price_Oscillator(CustomFactor):
         """
         4/52-Week Price Oscillator:
-        Average close prices over 4-weeks divided by average close
-        prices over 52-weeks all less 1.
+        Average close prices over 4-weeks divided by average close prices over 52-weeks all less 1.
         https://www.math.nyu.edu/faculty/avellane/Lo13030.pdf
         Notes:
         High value suggests momentum
@@ -209,90 +291,109 @@ def make_factors():
         window_length = 252
 
         def compute(self, today, assets, out, close):
-            four_week_period = close[-20:]
-            out[:] = (np.nanmean(four_week_period, axis=0) /
-                      np.nanmean(close, axis=0)) - 1.
 
+            # array to store values of each security
+            secs = []
+
+            for col in close.T:
+                # metric for each security
+                oscillator = (np.nanmean(col[-20:]) / np.nanmean(col)) - 1
+                secs.append(oscillator)
+            out[:] = secs
+
+    # Trendline
     class Trendline(CustomFactor):
+        inputs = [USEquityPricing.close]
         """
         52-Week Trendline:
         Slope of the linear regression across a 1 year lookback window.
         https://www.math.nyu.edu/faculty/avellane/Lo13030.pdf
         Notes:
         High value suggests momentum
-        Calculated using the MLE of the slope of the regression
+        Calculated using the MLE of the slope of the regression 
         """
-        inputs = [USEquityPricing.close]
         window_length = 252
 
-        # using MLE for speed
         def compute(self, today, assets, out, close):
 
-            # prepare X matrix (x_is - x_bar)
-            X = range(self.window_length)
-            X_bar = np.nanmean(X)
-            X_vector = X - X_bar
-            X_matrix = np.tile(X_vector, (len(close.T), 1)).T
+            # array to store values of each security
+            secs = []
 
-            # prepare Y matrix (y_is - y_bar)
-            Y_bar = np.nanmean(close, axis=0)
-            Y_bars = np.tile(Y_bar, (self.window_length, 1))
-            Y_matrix = close - Y_bars
+            # days elapsed
+            days = xrange(self.window_length)
 
-            # prepare variance of X
-            X_var = np.nanvar(X)
+            for col in close.T:
+                # metric for each security
+                col_cov = np.cov(col, days)
+                secs.append(col_cov[0, 1] / col_cov[1, 1])
+            out[:] = secs
 
-            # multiply X matrix an Y matrix and sum (dot product)
-            # then divide by variance of X
-            # this gives the MLE of Beta
-            out[:] = (np.sum((X_matrix * Y_matrix), axis=0) / X_var) / \
-                (self.window_length)
-
-    def Price_Momentum_1M():
+    # 1-month Price Rate of Change
+    class Price_Momentum_1M(CustomFactor):
         """
         1-Month Price Momentum:
         1-month closing price rate of change.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests momentum (shorter term)
         Equivalent to analysis of returns (1-month window)
         """
-        return Returns(window_length=21)
+        inputs = [USEquityPricing.close]
+        window_length = 21
 
-    def Price_Momentum_3M():
+        def compute(self, today, assets, out, close):
+            out[:] = (close[-1] - close[0]) / close[0]
+
+    # 3-month Price Rate of Change
+    class Price_Momentum_3M(CustomFactor):
         """
         3-Month Price Momentum:
         3-month closing price rate of change.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests momentum (shorter term)
         Equivalent to analysis of returns (3-month window)
         """
-        return Returns(window_length=63)
+        inputs = [USEquityPricing.close]
+        window_length = 63
 
-    def Price_Momentum_6M():
+        def compute(self, today, assets, out, close):
+            out[:] = (close[-1] - close[0]) / close[0]
+
+    # 6-month Price Rate of Change
+    class Price_Momentum_6M(CustomFactor):
         """
         6-Month Price Momentum:
         6-month closing price rate of change.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests momentum (medium term)
         Equivalent to analysis of returns (6-month window)
         """
-        return Returns(window_length=126)
+        inputs = [USEquityPricing.close]
+        window_length = 126
 
-    def Price_Momentum_12M():
+        def compute(self, today, assets, out, close):
+            out[:] = (close[-1] - close[0]) / close[0]
+
+    # 12-month Price Rate of Change
+    class Price_Momentum_12M(CustomFactor):
         """
         12-Month Price Momentum:
         12-month closing price rate of change.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests momentum (long term)
         Equivalent to analysis of returns (12-month window)
         """
-        return Returns(window_length=252)
+        inputs = [USEquityPricing.close]
+        window_length = 252
 
-    def Returns_39W():
+        def compute(self, today, assets, out, close):
+            out[:] = (close[-1] - close[0]) / close[0]
+
+    # 12-month Price Rate of Change
+    class Returns_39W(CustomFactor):
         """
         39-Week Returns:
         Returns over 39-week window.
@@ -301,144 +402,272 @@ def make_factors():
         High value suggests momentum (long term)
         Equivalent to analysis of price momentum (39-week window)
         """
-        return Returns(window_length=215)
+        inputs = [USEquityPricing.close]
+        window_length = 215
 
+        def compute(self, today, assets, out, close):
+            out[:] = (close[-1] - close[0]) / close[0]
+
+    # 1-month Mean Reversion
     class Mean_Reversion_1M(CustomFactor):
         """
         1-Month Mean Reversion:
-        1-month return less 12-month average of monthly return, all over
-        standard deviation of 12-month average of monthly returns.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        1-month returns minus 12-month average of monthly returns over standard deviation
+        of 12-month average of monthly returns.
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests momentum (short term)
         Equivalent to analysis of returns (12-month window)
         """
-        inputs = [Returns(window_length=21)]
+        inputs = [USEquityPricing.close]
         window_length = 252
 
-        def compute(self, today, assets, out, monthly_rets):
-            out[:] = (monthly_rets[-1] - np.nanmean(monthly_rets, axis=0)) / \
-                np.nanstd(monthly_rets, axis=0)
-                
+        def compute(self, today, assets, out, close):
+            ret_1M = (close[-1] - close[-21]) / close[-21]
+            ret_1Y_monthly = ((close[-1] - close[0]) / close[0]) / 12.
+            out[:] = (ret_1M - np.nanmean(ret_1Y_monthly)) / \
+                np.nanstd(ret_1Y_monthly)
+
     """EFFICIENCY"""
-    
-    def Capex_To_Assets():
+
+    # Capital Expenditure to Assets (MORNINGSTAR)
+    class Capex_To_Assets(CustomFactor):
         """
         Capital Expnditure to Assets:
         Capital Expenditure divided by Total Assets.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value suggests good efficiency, as expenditure is
-        being used to generate more assets
+        High value suggests good efficiency, as expenditure is being used to generate more assets
         """
-        return (cfs.capital_expenditure.latest * 4.) / \
-            bs.total_assets.latest
+        inputs = [morningstar.cash_flow_statement.capital_expenditure,
+                  morningstar.balance_sheet.total_assets]
+        window_length = 1
 
-    def EV_To_Sales_SalesGrowth():
-        """
-        Enterprise Value to Sales to Sales Growth
-        EV divided by Sales divided by Sales Growth.
-        
-        """
-        return  (v.enterprise_value.latest) / \
-                (is_.total_revenue.latest * 4.) / \
-                Returns(inputs=[is_.total_revenue], window_length=252)
-        
-    def Capex_To_Sales():
+        def compute(self, today, assets, out, capex, tot_assets):
+            out[:] = (capex[-1] * 4) / tot_assets[-1]
+
+    # Capital Expenditure to Sales (MORNINGSTAR)
+    class Capex_To_Sales(CustomFactor):
         """
         Capital Expnditure to Sales:
         Capital Expenditure divided by Total Revenue.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value suggests good efficiency, as expenditure is
-        being used to generate greater sales figures
+        High value suggests good efficiency, as expenditure is being used to generate greater sales figures
         """
-        return (cfs.capital_expenditure.latest * 4.) / \
-            (is_.total_revenue.latest * 4.)
+        inputs = [morningstar.cash_flow_statement.capital_expenditure,
+                  morningstar.income_statement.total_revenue]
+        window_length = 1
 
-    def Capex_To_Cashflows():
+        def compute(self, today, assets, out, capex, sales):
+            out[:] = (capex[-1] * 4) / (sales[-1] * 4)
+
+    # Capital Expenditure to Cashflows (MORNINGSTAR)
+    class Capex_To_Cashflows(CustomFactor):
         """
         Capital Expnditure to Cash Flows:
         Capital Expenditure divided by Free Cash Flows.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value suggests good efficiency, as expenditure is
-        being used to generate greater free cash flows
+        High value suggests good efficiency, as expenditure is being used to generate greater free cash flows
         """
-        return (cfs.capital_expenditure.latest * 4.) / \
-            (cfs.free_cash_flow.latest * 4.)
+        inputs = [morningstar.cash_flow_statement.capital_expenditure,
+                  morningstar.cash_flow_statement.free_cash_flow]
+        window_length = 1
 
-    def EBIT_To_Assets():
+        def compute(self, today, assets, out, capex, fcf):
+            out[:] = (capex[-1] * 4) / (fcf[-1] * 4)
+
+    # EBIT to Assets (MORNINGSTAR)
+    class EBIT_To_Assets(CustomFactor):
         """
         Earnings Before Interest and Taxes (EBIT) to Total Assets:
         EBIT divided by Total Assets.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value suggests good efficiency, as earnings are
-        being used to generate more assets
+        High value suggests good efficiency, as earnings are being used to generate more assets
         """
-        return (is_.ebit.latest * 4.) / \
-            bs.total_assets.latest
+        inputs = [morningstar.income_statement.ebit,
+                  morningstar.balance_sheet.total_assets]
+        window_length = 1
 
-    def Operating_Cashflows_To_Assets():
+        def compute(self, today, assets, out, ebit, tot_assets):
+            out[:] = (ebit[-1] * 4) / tot_assets[-1]
+
+    # Operating Expenditure to Assets (MORNINGSTAR)
+    class Operating_Cashflows_To_Assets(CustomFactor):
         """
         Operating Cash Flows to Total Assets:
         Operating Cash Flows divided by Total Assets.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value suggests good efficiency, as cash being used
-        for operations is being used to generate more assets
+        High value suggests good efficiency, as more cash being used for operations is being used to generate more assets
         """
-        return (cfs.operating_cash_flow.latest * 4.) / \
-            bs.total_assets.latest
+        inputs = [morningstar.cash_flow_statement.operating_cash_flow,
+                  morningstar.balance_sheet.total_assets]
+        window_length = 1
 
-    def Retained_Earnings_To_Assets():
+        def compute(self, today, assets, out, cfo, tot_assets):
+            out[:] = (cfo[-1] * 4) / tot_assets[-1]
+
+    # Retained Earnings to Assets (MORNINGSTAR)
+    class Retained_Earnings_To_Assets(CustomFactor):
         """
         Retained Earnings to Total Assets:
         Retained Earnings divided by Total Assets.
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value suggests good efficiency, as greater 
-        retained earnings are being used to generate more assets
+        High value suggests good efficiency, as greater retained earnings is being used to generate more assets
         """
-        return bs.retained_earnings.latest / \
-            bs.total_assets.latest
+        inputs = [morningstar.balance_sheet.retained_earnings,
+                  morningstar.balance_sheet.total_assets]
+        window_length = 1
+
+        def compute(self, today, assets, out, ret_earnings, tot_assets):
+            out[:] = ret_earnings[-1] / tot_assets[-1]
 
     """RISK/SIZE"""
 
+    # Market Cap
+    class Market_Cap(CustomFactor):
+        """
+        Market Capitalization:
+        Market Capitalization of the company issuing the equity. (Close Price * Shares Outstanding)
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
+        Notes:
+        High value for large companies, low value for small companies
+        In quant finance, normally investment in small companies is preferred, but thsi depends on the strategy
+        """
+        inputs = [morningstar.valuation.market_cap]
+        window_length = 1
+
+        def compute(self, today, assets, out, mc):
+            out[:] = mc[-1]
+
+    # Log Market Cap
+    class Log_Market_Cap(CustomFactor):
+        """
+        Natural Logarithm of Market Capitalization:
+        Log of Market Cap. log(Close Price * Shares Outstanding)
+        https://www.math.nyu.edu/faculty/avellane/Lo13030.pdf
+        Notes:
+        High value for large companies, low value for small companies
+        Limits the outlier effect of very large companies through log transformation
+        """
+        inputs = [morningstar.valuation.market_cap]
+        window_length = 1
+
+        def compute(self, today, assets, out, mc):
+            out[:] = np.log(mc[-1])
+
+    # Log Market Cap Cubed
+    class Log_Market_Cap_Cubed(CustomFactor):
+        """
+        Natural Logarithm of Market Capitalization Cubed:
+        Log of Market Cap Cubed.
+        https://www.math.nyu.edu/faculty/avellane/Lo13030.pdf
+        Notes:
+        High value for large companies, low value for small companies
+        Limits the outlier effect of very large companies through log transformation
+        """
+        inputs = [morningstar.valuation.market_cap]
+        window_length = 1
+
+        def compute(self, today, assets, out, mc):
+            out[:] = np.log(mc[-1]**3)
+
+    # Downside Risk
     class Downside_Risk(CustomFactor):
         """
         Downside Risk:
         Standard Deviation of 12-month monthly losses
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests high risk of losses
         """
-        inputs = [Returns(window_length=2)]
+        inputs = [USEquityPricing.close]
         window_length = 252
 
-        def compute(self, today, assets, out, rets):
-            down_rets = np.where(rets < 0, rets, np.nan)
-            out[:] = np.nanstd(down_rets, axis=0)
+        def compute(self, today, assets, out, close):
 
-    def SPY_Beta():
+            stdevs = []
+            # get monthly closes
+            close = close[0::21, :]
+            for col in close.T:
+                col_ret = ((col - np.roll(col, 1)) / np.roll(col, 1))[1:]
+                stdev = np.nanstd(col_ret[col_ret < 0])
+                stdevs.append(stdev)
+            out[:] = stdevs
+
+    # Index Beta
+    class Index_Beta(CustomFactor):
         """
         Index Beta:
-        Slope coefficient of 1-year regression of price returns
-        against index returns
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        Slope coefficient of 1-year regression of price returns against index returns
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests high market risk
         Slope calculated using regression MLE
         """
-        return RollingLinearRegressionOfReturns(
-            target=symbols('SPY'),
-            # above for research
-            # target=sid(8554) for backtester
-            returns_length=2,
-            regression_length=252
-        ).beta
+        inputs = [USEquityPricing.close]
+        window_length = 252
 
+        def compute(self, today, assets, out, close):
+
+            # get index and calculate returns. SPY code is 8554
+            benchmark_index = np.where((assets == 8554) == True)[0][0]
+            benchmark_close = close[:, benchmark_index]
+            benchmark_returns = (
+                (benchmark_close - np.roll(benchmark_close, 1)) / np.roll(benchmark_close, 1))[1:]
+
+            betas = []
+
+            # get beta for individual securities using MLE
+            for col in close.T:
+                col_returns = ((col - np.roll(col, 1)) / np.roll(col, 1))[1:]
+                col_cov = np.cov(col_returns, benchmark_returns)
+                betas.append(col_cov[0, 1] / col_cov[1, 1])
+            out[:] = betas
+
+    # Downside Beta
+    class Downside_Beta(CustomFactor):
+        """
+        Downside Beta:
+        Slope coefficient of 1-year regression of price returns against negative index returns
+        http://www.ruf.rice.edu/~yxing/downside.pdf
+        Notes:
+        High value suggests high exposure to the downmarket
+        Slope calculated using regression MLE
+        """
+        inputs = [USEquityPricing.close]
+        window_length = 252
+
+        def compute(self, today, assets, out, close):
+
+            # get index and calculate returns. SPY code is 8554
+            benchmark_index = np.where((assets == 8554) == True)[0][0]
+            benchmark_close = close[:, benchmark_index]
+            benchmark_returns = (
+                (benchmark_close - np.roll(benchmark_close, 1)) / np.roll(benchmark_close, 1))[1:]
+
+            # days where benchmark is negative
+            negative_days = np.argwhere(benchmark_returns < 0).flatten()
+
+            # negative days for benchmark
+            bmark_neg_day_returns = [benchmark_returns[i]
+                                     for i in negative_days]
+
+            betas = []
+
+            # get beta for individual securities using MLE
+            for col in close.T:
+                col_returns = ((col - np.roll(col, 1)) / np.roll(col, 1))[1:]
+                col_neg_day_returns = [col_returns[i] for i in negative_days]
+                col_cov = np.cov(col_neg_day_returns, bmark_neg_day_returns)
+                betas.append(col_cov[0, 1] / col_cov[1, 1])
+            out[:] = betas
+
+    # 3-month Volatility
     class Vol_3M(CustomFactor):
         """
         3-month Volatility:
@@ -448,267 +677,363 @@ def make_factors():
         High Value suggests that equity price fluctuates wildly
         """
 
-        inputs = [Returns(window_length=2)]
+        inputs = [USEquityPricing.close]
         window_length = 63
 
-        def compute(self, today, assets, out, rets):
-            out[:] = np.nanstd(rets, axis=0)
+        def compute(self, today, assets, out, close):
+
+            vols = []
+            for col in close.T:
+                # compute returns
+                log_col_returns = np.log(col / np.roll(col, 1))[1:]
+                vols.append(np.nanstd(log_col_returns))
+            out[:] = vols
 
     """GROWTH"""
 
-    def Sales_Growth_3M():
+    # 3-month Sales Growth
+    class Sales_Growth_3M(CustomFactor):
         """
         3-month Sales Growth:
         Increase in total sales over 3 months
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value represents large growth (short term)
         """
-        return Returns(inputs=[is_.total_revenue], window_length=63)
+        inputs = [morningstar.income_statement.total_revenue]
+        window_length = 63
 
-    def Sales_Growth_12M():
+        def compute(self, today, assets, out, sales):
+            out[:] = ((sales[-1] * 4) - (sales[0]) * 4) / (sales[0] * 4)
+
+    # 12-month Sales Growth
+    class Sales_Growth_12M(CustomFactor):
         """
         12-month Sales Growth:
         Increase in total sales over 12 months
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value represents large growth (long term)
         """
-        return Returns(inputs=[is_.total_revenue], window_length=252)
+        inputs = [morningstar.income_statement.total_revenue]
+        window_length = 252
 
-    def EPS_Growth_12M():
+        def compute(self, today, assets, out, sales):
+            out[:] = ((sales[-1] * 4) - (sales[0]) * 4) / (sales[0] * 4)
+
+    # 12-month EPS Growth
+    class EPS_Growth_12M(CustomFactor):
         """
         12-month Earnings Per Share Growth:
         Increase in EPS over 12 months
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value represents large growth (long term)
         """
-        return Returns(inputs=[er.basic_eps], window_length=252)
+        inputs = [morningstar.earnings_report.basic_eps]
+        window_length = 252
+
+        def compute(self, today, assets, out, eps):
+            out[:] = (eps[-1] - eps[0]) / eps[0]
 
     """QUALITY"""
 
+    # Asset Turnover
     class Asset_Turnover(CustomFactor):
         """
         Asset Turnover:
         Sales divided by average of year beginning and year end assets
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value represents good financial health
         Varies substantially between sectors
         """
-        inputs = [is_.total_revenue, bs.total_assets]
+        inputs = [morningstar.income_statement.total_revenue,
+                  morningstar.balance_sheet.total_assets]
         window_length = 252
 
         def compute(self, today, assets, out, sales, tot_assets):
-            out[:] = (sales[-1] * 4.) / \
-                ((tot_assets[-1] + tot_assets[0]) / 2.)
 
-    def Asset_Growth_3M():
+            turnovers = []
+
+            for col in tot_assets.T:
+                # average of assets in last two years
+                turnovers.append((col[-1] + col[0]) / 2)
+            out[:] = (sales[-1] * 4) / turnovers
+
+    # 3-month Asset Growth
+    class Asset_Growth_3M(CustomFactor):
         """
         3-month Asset Growth:
         Increase in total assets over 3 months
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value represents good financial health as quantity of
-        assets is increasing
+        High value represents good financial health as quantity of assets is increasing
         """
-        return Returns(inputs=[bs.total_assets], window_length=63)
+        inputs = [morningstar.balance_sheet.total_assets]
+        window_length = 63
 
-    def Current_Ratio():
+        def compute(self, today, assets, out, tot_assets):
+            out[:] = (tot_assets[-1] - tot_assets[0]) / tot_assets[0]
+
+    # Current Ratio
+    class Current_Ratio(CustomFactor):
         """
         Current Ratio:
         Total current assets divided by total current liabilities
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value represents good financial health as assets
-        are greater than liabilities (>1)
-        Morningstar built-in fundamental ratio more accurate
-        than calculated ratio
+        High value represents good financial health as assets are greater than liabilities (>1)
+        Morningstar built-in fundamental ratio more accurate than calculated ratio
         """
-        return or_.current_ratio.latest
+        inputs = [morningstar.operation_ratios.current_ratio]
+        window_length = 1
 
-    def Asset_To_Equity_Ratio():
+        def compute(self, today, assets, out, cr):
+            out[:] = cr[-1]
+
+    # Asset/Equity Ratio
+    class Asset_To_Equity_Ratio(CustomFactor):
         """
         Asset / Equity Ratio
         Total current assets divided by common equity
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that company has taken on substantial debt
         Vaires substantially with industry
         """
-        return bs.total_assets.latest / bs.common_stock_equity.latest
+        inputs = [morningstar.balance_sheet.total_assets,
+                  morningstar.balance_sheet.common_stock_equity]
+        window_length = 1
 
-    def Interest_Coverage():
+        def compute(self, today, assets, out, tot_assets, equity):
+            out[:] = tot_assets[-1] / equity[-1]
+
+    # Interest Coverage
+    class Interest_Coverage(CustomFactor):
         """
         Interest Coverage:
         EBIT divided by interest expense
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that company has taken on substantial debt
         Varies substantially with industry
         """
-        return is_.ebit.latest / is_.interest_expense.latest
+        inputs = [morningstar.income_statement.ebit,
+                  morningstar.income_statement.interest_expense]
+        window_length = 1
 
-    def Debt_To_Asset_Ratio():
+        def compute(self, today, assets, out, ebit, interest_expense):
+            out[:] = (ebit[-1] * 4) / (interest_expense[-1] * 4)
+
+    # Debt to Asset Ratio
+    class Debt_To_Asset_Ratio(CustomFactor):
         """
         Debt / Asset Ratio:
         Total Debts divided by Total Assets
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that company has taken on substantial debt
         Low value suggests good financial health as assets greater than debt
         Long Term Debt
         """
-        return bs.total_debt.latest / bs.total_assets.latest
+        inputs = [morningstar.balance_sheet.total_debt,
+                  morningstar.balance_sheet.total_assets]
+        window_length = 1
 
-    def Debt_To_Equity_Ratio():
+        def compute(self, today, assets, out, debt, tot_assets):
+            out[:] = debt[-1] / tot_assets[-1]
+
+    # Debt to Equity Ratio
+    class Debt_To_Equity_Ratio(CustomFactor):
         """
         Debt / Equity Ratio:
         Total Debts divided by Common Stock Equity
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that company is taking on debts to leverage
-        Low value suggests good financial health as little-to-no leveraging
+        Low value suggests good financial health as little-to-no leveraging 
         Long Term Debt
         """
-        return bs.total_debt.latest / bs.common_stock_equity.latest
+        inputs = [morningstar.balance_sheet.total_debt,
+                  morningstar.balance_sheet.common_stock_equity]
+        window_length = 1
 
+        def compute(self, today, assets, out, debt, equity):
+            out[:] = debt[-1] / equity[-1]
+
+    # 3-month Net Debt Growth
     class Net_Debt_Growth_3M(CustomFactor):
         """
         3-Month Net Debt Growth:
         Increase in net debt (total debt - cash) over 3 month window
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that a company is acquiring more debt
-        Low value suggests good financial health as debt is decreasing
+        Low value suggests good financial health as debt is decreasing 
         Long Term Debt
         """
-        inputs = [bs.total_debt, bs.cash_and_cash_equivalents]
+        inputs = [morningstar.balance_sheet.total_debt,
+                  morningstar.balance_sheet.cash_and_cash_equivalents]
         window_length = 92
 
         def compute(self, today, assets, out, debt, cash):
             out[:] = ((debt[-1] - cash[-1]) - (debt[0] - cash[0])) / \
                 (debt[0] - cash[0])
 
-    def Working_Capital_To_Assets():
+    # Working Capital / Assets
+    class Working_Capital_To_Assets(CustomFactor):
         """
         Working Capital / Assets:
-        Current Assets less Current liabilities (Working Capital)
-        all divided by Assets
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        Current Assets less Current liabilities (Working Capital) all divided by Assets
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that company is currently using more money
         than they are saving (holding as assets)
-        Low value suggests good financial health as holding more in assets
-        than risking through use working_capital more accurate 
-        than total_assets and total_liabilities
-        """
-        return bs.working_capital.latest / bs.total_assets.latest
-
-    def Working_Capital_To_Sales():
-        """
-        Working Capital / Sales:
-        Current Assets less Current liabilities (Working Capital)
-        all divided by Sales
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
-        Notes:
-        High value suggests that company is currently using more money
-        than taking in through sales than they are saving (holding as assets)
-        Low value suggests good financial health as sales stronger
-        than money risked through use
+        Low value suggests good financial health as holding more in assets than risking through use
         working_capital more accurate than total_assets and total_liabilities
         """
-        return bs.working_capital.latest / is_.total_revenue.latest
-    
-    
-    def Earnings_Quality():
-        return morningstar.cash_flow_statement.operating_cash_flow.latest / \
-               EarningsSurprises.eps_act.latest
-    
-    
+        inputs = [morningstar.balance_sheet.working_capital,
+                  morningstar.balance_sheet.total_assets]
+        window_length = 1
+
+        def compute(self, today, assets, out, capital, tot_assets):
+            out[:] = capital[-1] / tot_assets[-1]
+
+    # Working Capital / Sales
+    class Working_Capital_To_Sales(CustomFactor):
+        """
+        Working Capital / Sales:
+        Current Assets less Current liabilities (Working Capital) all divided by Sales
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
+        Notes:
+        High value suggests that company is currently using more money than taking in through sales
+        than they are saving (holding as assets)
+        Low value suggests good financial health as sales stronger than money risked through use
+        working_capital more accurate than total_assets and total_liabilities
+        """
+        inputs = [morningstar.balance_sheet.working_capital,
+                  morningstar.income_statement.total_revenue]
+        window_length = 1
+
+        def compute(self, today, assets, out, capital, sales):
+            out[:] = capital[-1] / (sales[-1] * 4)
+
     """PAYOUT"""
 
-    def Dividend_Growth():
+    # Dividend Growth
+    class Dividend_Growth(CustomFactor):
         """
         Dividend Growth:
         Growth in dividends observed over a 1-year lookback window
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value suggests that rate at which the quantity of dividends
-        paid out is increasing Morningstar built-in fundamental
-        better as adjusts inf values
+        High value suggests that rate at which the quantity of dividends paid out is increasing
+        Morningstar built-in fundamental better as adjusts inf values
         """
-        return morningstar.earnings_ratios.dps_growth.latest
+        inputs = [morningstar.earnings_ratios.dps_growth]
+        window_length = 1
 
-    def Dividend_Payout_Ratio():
+        def compute(self, today, assets, out, dpsg):
+            out[:] = dpsg[-1]
+
+    # Dividend Payout Ratio
+    class Dividend_Payout_Ratio(CustomFactor):
         """
         Dividend Payout Ratio:
         Dividends Per Share divided by Earnings Per Share
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
-        High value suggests that the amount of earnings paid back
-        to equityholders is large
+        High value suggests that the amount of earnings paid back to equityholders is large
         """
-        return morningstar.earnings_report.dividend_per_share.latest / \
-            morningstar.earnings_report.basic_eps.latest
-        
-        
+        inputs = [morningstar.earnings_report.dividend_per_share,
+                  morningstar.earnings_report.basic_eps]
+        window_length = 1
+
+        def compute(self, today, assets, out, dps, eps):
+            out[:] = (dps[-1] * 4) / (eps[-1] * 4)
+
     """PROFITABILITY"""
 
-    def Gross_Income_Margin():
+    # Gross Income Margin
+    class Gross_Income_Margin(CustomFactor):
         """
         Gross Income Margin:
         Gross Profit divided by Net Sales
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that the company is generating large profits
         """
-        return is_.gross_profit.latest / is_.total_revenue.latest
+        inputs = [morningstar.income_statement.gross_profit,
+                  morningstar.income_statement.total_revenue]
+        window_length = 1
 
-    def Net_Income_Margin():
+        def compute(self, today, assets, out, gp, sales):
+            out[:] = (gp[-1] * 4) / (sales[-1] * 4)
+
+    # Net Income Margin
+    class Net_Income_Margin(CustomFactor):
         """
         Gross Income Margin:
         Gross Profit divided by Net Sales
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that the company is generating large profits
-        Builtin used as cleans inf values
+        Ratio used as cleans inf values
         """
-        return or_.net_margin.latest
+        inputs = [morningstar.operation_ratios.net_margin]
+        window_length = 1
 
-    def Return_On_Total_Equity():
+        def compute(self, today, assets, out, nm):
+            out[:] = nm[-1]
+
+    # Return on Total Equity
+    class Return_On_Total_Equity(CustomFactor):
         """
         Return on Total Equity:
         Net income divided by average of total shareholder equity
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that the company is generating large profits
-        Builtin used as cleans inf values
+        Ratio used as cleans inf values
         """
-        return or_.roe.latest
+        inputs = [morningstar.operation_ratios.roe]
+        window_length = 1
 
-    def Return_On_Total_Assets():
+        def compute(self, today, assets, out, roe):
+            out[:] = roe[-1]
+
+    # Return on Total Assets
+    class Return_On_Total_Assets(CustomFactor):
         """
         Return on Total Assets:
         Net income divided by average total assets
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that the company is generating large profits
-        Builtin used as cleans inf values
+        Ratio used as cleans inf values
         """
-        return or_.roa.latest
+        inputs = [morningstar.operation_ratios.roa]
+        window_length = 1
 
-    def Return_On_Total_Invest_Capital():
+        def compute(self, today, assets, out, roa):
+            out[:] = roa[-1]
+
+    # Return on Total Equity
+    class Return_On_Total_Invest_Capital(CustomFactor):
         """
         Return on Total Invest Capital:
         Net income divided by average total invested capital
-        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf # NOQA
+        https://www.pnc.com/content/dam/pnc-com/pdf/personal/wealth-investments/WhitePapers/FactorAnalysisFeb2014.pdf
         Notes:
         High value suggests that the company is generating large profits
-        Builtin used as cleans inf values
+        Ratio used as cleans inf values
         """
-        return or_.roic.latest
+        inputs = [morningstar.operation_ratios.roic]
+        window_length = 1
+
+        def compute(self, today, assets, out, roic):
+            out[:] = roic[-1]
 
     """PRICE REVERSAL"""
 
@@ -809,82 +1134,90 @@ def make_factors():
 
     """TECHNICALS"""
 
-#     # Merton's Distance to Default
-#     class Mertons_DD(CustomFactor):
-#         """
-#         Merton's Distance to Default:
-#         Application the BS Formula with assets as S_t and liabilities as the strike
-#         https://www.bostonfed.org/bankinfo/conevent/slowdown/groppetal.pdf
-#         Notes:
-#         Lower value suggests increased default risk of company issuing equity
-#         """
-#         inputs = [morningstar.balance_sheet.total_assets,
-#                   morningstar.balance_sheet.total_liabilities, libor.value, USEquityPricing.close]
-#         window_length = 252
+    # Merton's Distance to Default
+    class Mertons_DD(CustomFactor):
+        """
+        Merton's Distance to Default:
+        Application the BS Formula with assets as S_t and liabilities as the strike
+        https://www.bostonfed.org/bankinfo/conevent/slowdown/groppetal.pdf
+        Notes:
+        Lower value suggests increased default risk of company issuing equity
+        """
+        inputs = [morningstar.balance_sheet.total_assets,
+                  morningstar.balance_sheet.total_liabilities, libor.value, USEquityPricing.close]
+        window_length = 252
 
-#         def compute(self, today, assets, out, tot_assets, tot_liabilities, r, close):
-#             mertons = []
+        def compute(self, today, assets, out, tot_assets, tot_liabilities, r, close):
+            mertons = []
 
-#             for col_assets, col_liabilities, col_r, col_close in zip(tot_assets.T, tot_liabilities.T,
-#                                                                      r.T, close.T):
-#                 vol_1y = np.nanstd(col_close)
-#                 numerator = np.log(
-#                     col_assets[-1] / col_liabilities[-1]) + ((252 * col_r[-1]) - ((vol_1y**2) / 2))
-#                 mertons.append(numerator / vol_1y)
+            for col_assets, col_liabilities, col_r, col_close in zip(tot_assets.T, tot_liabilities.T,
+                                                                     r.T, close.T):
+                vol_1y = np.nanstd(col_close)
+                numerator = np.log(
+                    col_assets[-1] / col_liabilities[-1]) + ((252 * col_r[-1]) - ((vol_1y**2) / 2))
+                mertons.append(numerator / vol_1y)
 
-#             out[:] = mertons
-                   
-            
-    all_factors = {
-        'Asset Growth 3M': Asset_Growth_3M,
-        'EV_To_Sales_SalesGrowth': EV_To_Sales_SalesGrowth,
-        'Asset to Equity Ratio': Asset_To_Equity_Ratio,
-        'Asset Turnover': Asset_Turnover,
-        'Capex to Assets': Capex_To_Assets,
-        'Capex to Cashflows': Capex_To_Cashflows,
-        'Capex to Sales': Capex_To_Sales,
-        'Cashflows to Assets': Cashflows_To_Assets,
-        'Current Ratio': Current_Ratio,
-        'Debt to Asset Ratio': Debt_To_Asset_Ratio,
-        'Dividend Growth': Dividend_Growth,
-        'Dividend Payout Ratio': Dividend_Payout_Ratio,
-        'Dividend Yield': Dividend_Yield,
-        'EBITDA Yield': EBITDA_Yield,
-        'EBIT to Assets': EBIT_To_Assets,
-        'Earnings Quality': Earnings_Quality,
-        'EV to Cashflows': EV_To_Cashflows,
-        'EV to EBITDA': EV_To_EBITDA,
-        'Gross Income Margin': Gross_Income_Margin,
-        'Interest Coverage': Interest_Coverage,
-        'MACD Signal Line': MACD_Signal_10d,
-        'Market Cap': Market_Cap,
-        'Mean Reversion 1M': Mean_Reversion_1M,
-        'Moneyflow Volume 5D': Moneyflow_Volume_5d,
-        'Net Debt Growth 3M': Net_Debt_Growth_3M,
-        'Net Income Margin': Net_Income_Margin,
-        'Operating Cashflows to Assets': Operating_Cashflows_To_Assets,
-        'Price Momentum 12M': Price_Momentum_12M,
-        'Price Momentum 1M': Price_Momentum_1M,
-        'Price Momentum 3M': Price_Momentum_3M,
-        'Price Momentum 6M': Price_Momentum_6M,
-        'Price Oscillator': Price_Oscillator,
-        'Price to Book': Price_To_Book,
-        'Price to Diluted Earnings': Price_To_Diluted_Earnings,
-        'Price to Earnings': Price_To_Earnings,
-        'Price to Forward Earnings': Price_To_Forward_Earnings,
-        'Price to Free Cashflows': Price_To_Free_Cashflows,
-        'Price to Operating Cashflows': Price_To_Operating_Cashflows,
-        'Price to Sales': Price_To_Sales,
-        'Retained Earnings to Assets': Retained_Earnings_To_Assets,
-        'Return on Total Assets': Return_On_Total_Assets,
-        'Return on Total Equity': Return_On_Total_Equity,
-        'Return on Invest Capital': Return_On_Total_Invest_Capital,
-        '39 Week Returns': Returns_39W,
-        'Stochastic Oscillator': Stochastic_Oscillator,
-        'Trendline': Trendline,
-        'Vol 3M': Vol_3M,
-        'Working Capital to Assets': Working_Capital_To_Assets,
-        'Working Capital to Sales': Working_Capital_To_Sales,
-    }
-    
-    return all_factors
+            out[:] = mertons
+
+
+FACTORS = {
+    'Asset Growth 3M': Factors.Asset_Growth_3M,
+    'Asset to Equity Ratio': Factors.Asset_To_Equity_Ratio,
+    'Asset Turnover': Factors.Asset_Turnover,
+    'Capex to Assets': Factors.Capex_To_Assets,
+    'Capex to Cashflows': Factors.Capex_To_Cashflows,
+    'Capex to Sales': Factors.Capex_To_Sales,
+    'Cashflows to Assets': Factors.Cashflows_To_Assets,
+    'Current Ratio': Factors.Current_Ratio,
+    'Debt to Asset Ratio': Factors.Debt_To_Asset_Ratio,
+    'Dividend Growth': Factors.Dividend_Growth,
+    'Dividend Payout Ratio': Factors.Dividend_Payout_Ratio,
+    'Dividend Yield': Factors.Dividend_Yield,
+    'Downside Beta': Factors.Downside_Beta,
+    'Downside Risk': Factors.Downside_Risk,
+    'EBITDA Yield': Factors.EBITDA_Yield,
+    'EBIT to Assets': Factors.EBIT_To_Assets,
+    'EPS Growth 12M': Factors.EPS_Growth_12M,
+    'EV to Cashflows': Factors.EV_To_Cashflows,
+    'EV to EBITDA': Factors.EV_To_EBITDA,
+    'Gross Income Margin': Factors.Gross_Income_Margin,
+    'Index Beta': Factors.Index_Beta,
+    'Interest Coverage': Factors.Interest_Coverage,
+    'Log Market Cap': Factors.Log_Market_Cap,
+    'Log Market Cap Cubed': Factors.Log_Market_Cap_Cubed,
+    'MACD Signal Line': Factors.MACD_Signal_10d,
+    'Market Cap': Factors.Market_Cap,
+    'Mean Reversion 1M': Factors.Mean_Reversion_1M,
+    'Mertons Distance to Default': Factors.Mertons_DD,
+    'Moneyflow Volume 5D': Factors.Moneyflow_Volume_5d,
+    'Net Debt Growth 3M': Factors.Net_Debt_Growth_3M,
+    'Net Income Margin': Factors.Net_Income_Margin,
+    'Operating Cashflows to Assets': Factors.Operating_Cashflows_To_Assets,
+    'Percent Above Low': Factors.Percent_Above_Low,
+    'Percent Below High': Factors.Percent_Below_High,
+    'Price Momentum 12M': Factors.Price_Momentum_12M,
+    'Price Momentum 1M': Factors.Price_Momentum_1M,
+    'Price Momentum 3M': Factors.Price_Momentum_3M,
+    'Price Momentum 6M': Factors.Price_Momentum_6M,
+    'Price Oscillator': Factors.Price_Oscillator,
+    'Price to Book': Factors.Price_To_Book,
+    'Price to Diluted Earnings': Factors.Price_To_Diluted_Earnings,
+    'Price to Earnings': Factors.Price_To_Earnings,
+    'Price to Forward Earnings': Factors.Price_To_Forward_Earnings,
+    'Price to Free Cashflows': Factors.Price_To_Free_Cashflows,
+    'Price to Operating Cashflows': Factors.Price_To_Operating_Cashflows,
+    'Price to Sales': Factors.Price_To_Sales,
+    'Retained Earnings to Assets': Factors.Retained_Earnings_To_Assets,
+    'Return on Total Assets': Factors.Return_On_Total_Assets,
+    'Return on Total Equity': Factors.Return_On_Total_Equity,
+    'Return on Invest Capital': Factors.Return_On_Total_Invest_Capital,
+    '39 Week Returns': Factors.Returns_39W,
+    'Sales Growth 12M': Factors.Sales_Growth_12M,
+    'Sales Growth 3M': Factors.Sales_Growth_3M,
+    'Stochastic Oscillator': Factors.Stochastic_Oscillator,
+    'Trendline': Factors.Trendline,
+    'Vol 3M': Factors.Vol_3M,
+    'Working Capital to Assets': Factors.Working_Capital_To_Assets,
+    'Working Capital to Sales': Factors.Working_Capital_To_Sales,
+
+}
