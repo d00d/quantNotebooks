@@ -8,7 +8,11 @@ import pandas as pd
 import numpy as np
 
 v = morningstar.valuation
-
+"""
+ This algo leverages a multi-Factor Model inspired by Goldman Sachs Active Beta Large Cap ETF (GSLC)
+ for factor selection (value, quality, momentum and low volatility) applied in a weighted long-short algorithm.
+ Criteria include sales EV_To_Sales_SalesGrowth_12M; profit/assets or ROE; risk-adjusted returns; and daily standard deviation of returns. 
+"""
 # --- Liquidity Factor ---                    
 class AvgDailyDollarVolumeTraded(CustomFactor):
     
@@ -30,13 +34,22 @@ class Value(CustomFactor):
     
 # --- Momentum Factor ---
 # --- 9/13: Modified Momentum factor to include (I/S)*LT scheme (I=50d, S=20d, LT=140d)
+# --- 9/15: Reverted to basic 12M less most recent month.
 class Momentum(CustomFactor):
     
+    inputs = [USEquityPricing.close]
+    window_length = 252
+    
+    def compute(self, today, assets, out, close):       
+        out[:] = close[-20] / close[0]
+
+    """
     inputs = [USEquityPricing.close] 
     window_length = 140
     
     def compute(self, today, assets, out, close):       
         out[:] = ((close[-1] / close[-50]) / (close[-1] / (close[-20]))* close[-1])
+    """
 
 # --- Quality Factor ---            
 class Quality(CustomFactor):
@@ -63,12 +76,13 @@ class Volatility(CustomFactor):
 # Compute final rank and assign long and short baskets.
 def before_trading_start(context, data):
     results = pipeline_output('factors').dropna()
+   
     ranks = results.rank().mean(axis=1).order()
     
-    context.shorts = 1 / ranks.head(200)
+    context.shorts = 1 / ranks.head(150)
     context.shorts /= context.shorts.sum()
     
-    context.longs = ranks.tail(200)
+    context.longs = ranks.tail(150)
     context.longs /= context.longs.sum()
     
     update_universe(context.longs.index + context.shorts.index)
@@ -115,16 +129,20 @@ def cancel_open_orders(context, data):
         
     
 def rebalance(context, data):
+    # ------------------------------------------------------- SHORT Equities
     for security in context.shorts.index:
         if get_open_orders(security):
             continue
         if security in data:
+            # ----------------------------------------------- % - SHORT
             order_target_percent(security, -context.shorts[security])
             
+    # ------------------------------------------------------- LONG Equities
     for security in context.longs.index:
         if get_open_orders(security):
             continue
         if security in data:
+            # ----------------------------------------------- % - LONG
             order_target_percent(security, context.longs[security])
             
     for security in context.portfolio.positions:
