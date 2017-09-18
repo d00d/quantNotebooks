@@ -2,12 +2,13 @@ from quantopian.algorithm import attach_pipeline, pipeline_output
 from quantopian.pipeline import Pipeline
 from quantopian.pipeline.data.builtin import USEquityPricing
 from quantopian.pipeline.factors import CustomFactor, SimpleMovingAverage
+from quantopian.pipeline.data import Fundamentals as f
 from quantopian.pipeline.data import morningstar
 
 import pandas as pd
 import numpy as np
 
-v = morningstar.valuation
+
 """
  This algo leverages a multi-Factor Model inspired by Goldman Sachs Active Beta Large Cap ETF (GSLC)
  for factor selection (value, quality, momentum and low volatility) applied in a weighted long-short algorithm.
@@ -26,9 +27,14 @@ class AvgDailyDollarVolumeTraded(CustomFactor):
 # --- Growth Factor ---                    
 class Value(CustomFactor):
    
-    inputs = [morningstar.valuation_ratios.book_value_yield,
-              morningstar.valuation_ratios.sales_yield,
-              morningstar.valuation_ratios.fcf_yield] 
+    inputs = [
+              f.book_value_yield,
+                #morningstar.valuation_ratios.book_value_yield,
+              f.sales_yield,
+                #morningstar.valuation_ratios.sales_yield,
+              f.fcf_yield
+                #morningstar.valuation_ratios.fcf_yield
+              ] 
     
     window_length = 1
     
@@ -37,15 +43,10 @@ class Value(CustomFactor):
         value_table["book_value"] = book_value[-1]
         value_table["sales"] = sales[-1]
         value_table["fcf"] = fcf[-1]
+        
         out[:] = value_table.rank().mean(axis=1)
-   """
-    #EV_To_Sales_SalesGrowth_12M
-    inputs = [morningstar.income_statement.total_revenue, v.enterprise_value]
-    window_length = 252
-
-    def compute(self, today, assets, out, sales, ev):
-        out[:] = ev[-1] / ((sales[-1] * 4)/(((sales[-1] * 4) - (sales[0]) * 4) / (sales[0] * 4)))
-    """
+        
+   
 # --- Momentum Factor ---
 # --- 9/13: Modified Momentum factor to include (I/S)*LT scheme (I=50d, S=20d, LT=140d)
 # --- 9/15: Reverted to basic 12M less most recent month.
@@ -68,7 +69,8 @@ class Momentum(CustomFactor):
 # --- Quality Factor ---            
 class Quality(CustomFactor):
     
-    inputs = [morningstar.operation_ratios.roe]
+    # 9/18 - Replaced morningstar with quantopian.pipeline.data.Fundamentals for speed and performance.
+    inputs = [f.roe]
     window_length = 1
     
     def compute(self, today, assets, out, roe):       
@@ -143,24 +145,25 @@ def cancel_open_orders(context, data):
         
     
 def rebalance(context, data):
-    # ------------------------------------------------------- SHORT Equities
+    # ---- SHORT Equities
     for security in context.shorts.index:
         if get_open_orders(security):
             continue
         
         if data.can_trade(security):
-            # ----------------------------------------------- % - SHORT
+            # --- % Short ---
             order_target_percent(security, -context.shorts[security])
             
-    # ------------------------------------------------------- LONG Equities
+    # ---- LONG Equities
     for security in context.longs.index:
         if get_open_orders(security):
             continue
 
         if data.can_trade(security):
-            # ----------------------------------------------- % - LONG
+            # --- % Long ---
             order_target_percent(security, context.longs[security])
             
+    # --- Existing Positions - Eliminate where not in LONG or SHORT index.
     for security in context.portfolio.positions:
         if get_open_orders(security):
             continue
